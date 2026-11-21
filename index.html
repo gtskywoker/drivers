@@ -110,7 +110,7 @@ setInterval(load, REFRESH_MS);
 // ===== แชร์ตำแหน่งอัตโนมัติเมื่อเปิดหน้านี้ =====
 const ME = localStorage.getItem("me") || ("d" + Math.random().toString(36).slice(2, 8));
 localStorage.setItem("me", ME);
-let myStatus = localStorage.getItem("st") || "free", myPos = null;
+let myStatus = "free", myPos = null;   // ไม่มีปุ่มสลับสถานะแล้ว
 const tg = document.getElementById("tg");
 function paintTg() {
   tg.className = myStatus === "busy" ? "busy" : "";
@@ -126,7 +126,7 @@ async function report() {
   } catch (e) {}
 }
 const VIEWONLY = new URLSearchParams(location.search).has("viewonly");   // ?viewonly=1 = ไม่ส่งสถานะเอง (ใช้ MacroDroid ส่ง)
-if (VIEWONLY) tg.style.display = "none";
+tg.style.display = "none";   // ซ่อนปุ่ม: สถานะจะมาจากแอป KPG (ยังไม่เชื่อม) ตอนนี้ทุกคนนับเป็น "ว่าง"
 function zoneOf(lat, lon) {
   let best = ZONES[0], bd = 1e9;
   for (const z of ZONES) { const dd = (z.lat - lat) ** 2 + (z.lon - lon) ** 2; if (dd < bd) { bd = dd; best = z; } }
