@@ -17,7 +17,7 @@
   #tg{position:absolute;z-index:1000;bottom:34px;left:10px;right:10px;padding:18px;border:0;border-radius:16px;
       font:600 18px system-ui,"Noto Sans Thai",sans-serif;color:#fff;background:#16a34a;box-shadow:0 2px 8px rgba(0,0,0,.3)}
   #tg.busy{background:#ea7a0c}
-  .zone{background:#fffe;border-radius:10px;padding:4px 8px;text-align:center;font:600 12px system-ui,'Noto Sans Thai',sans-serif;box-shadow:0 1px 5px #0005;width:max-content;transform:translate(-50%,-50%)}
+  .zone{background:#fffe;border-radius:10px;padding:4px 8px;text-align:center;font:600 12px system-ui,'Noto Sans Thai',sans-serif;box-shadow:0 1px 5px #0005;position:absolute;left:0;top:0;width:max-content;transform:translate(-50%,-50%)}
   .zone .zn{color:#3f3f46;font-weight:500}.zone .g{color:#16a34a;margin-right:8px}.zone .o{color:#ea7a0c}
   #gate{position:fixed;inset:0;z-index:3000;background:#18181b;color:#fff;display:flex;flex-direction:column;
         align-items:center;justify-content:center;gap:16px;padding:28px;text-align:center;font-family:system-ui,"Noto Sans Thai",sans-serif}
@@ -59,6 +59,7 @@ const layer = L.layerGroup().addTo(map);
 // โซนโดยประมาณ (พิกัดกลางโซน ปรับแก้ได้)
 const ZONES = [
   {name: "ทองศาลา", lat: 9.718, lon: 99.984},            // วัดจากพิกัดจริง (±4 ม.)
+  {name: "หินกอง", lat: 9.735, lon: 99.980},            // วัดจากพิกัดจริง (±4 ม.)
   {name: "ศรีธนู/หาดยาว", lat: 9.758, lon: 99.964},
   {name: "โฉลกหลำ/แม่หาด", lat: 9.790, lon: 100.005},
   {name: "บ้านใต้/มะเดื่อหวาน", lat: 9.708, lon: 100.018},
@@ -94,7 +95,7 @@ async function load() {
     }
     for (const z of ZONES) {                               // วาดเป็นจำนวนต่อโซน ไม่โชว์ตำแหน่งจริง
       if (z.f + z.b === 0) continue;
-      L.marker([z.lat, z.lon], {icon: L.divIcon({className: "", iconSize: [130, 46], html:
+      L.marker([z.lat, z.lon], {icon: L.divIcon({className: "", iconSize: [0, 0], html:
         `<div class="zone"><div class="zn">${z.name}</div><span class="g">ว่าง ${z.f}</span><span class="o">รับงาน ${z.b}</span></div>`})}).addTo(layer);
     }
     document.getElementById("nf").textContent = nf;
@@ -127,13 +128,18 @@ async function report() {
 }
 const VIEWONLY = new URLSearchParams(location.search).has("viewonly");   // ?viewonly=1 = ไม่ส่งสถานะเอง (ใช้ MacroDroid ส่ง)
 tg.style.display = "none";   // ซ่อนปุ่ม: สถานะจะมาจากแอป KPG (ยังไม่เชื่อม) ตอนนี้ทุกคนนับเป็น "ว่าง"
+let meDot = null;
+function setMeDot(lat, lon) {
+  if (!meDot) meDot = L.circleMarker([lat, lon], {radius: 8, color: "#fff", weight: 3, fillColor: "#2563eb", fillOpacity: 1, interactive: false}).addTo(map);
+  else meDot.setLatLng([lat, lon]);
+}
 function zoneOf(lat, lon) {
   let best = ZONES[0], bd = 1e9;
   for (const z of ZONES) { const dd = (z.lat - lat) ** 2 + (z.lon - lon) ** 2; if (dd < bd) { bd = dd; best = z; } }
   return best.name;
 }
 function unlock(p) {
-  myPos = {lat: p.coords.latitude, lon: p.coords.longitude};
+  myPos = {lat: p.coords.latitude, lon: p.coords.longitude}; setMeDot(myPos.lat, myPos.lon);
   unlocked = true;
   document.getElementById("gate").style.display = "none";
   const me = document.getElementById("me");
@@ -142,7 +148,7 @@ function unlock(p) {
   load();
   navigator.geolocation.watchPosition(q => {
     if (q.coords.accuracy > 500) return;   // ข้ามค่าที่คลาดเคลื่อนเกิน 500 ม.
-    myPos = {lat: q.coords.latitude, lon: q.coords.longitude};
+    myPos = {lat: q.coords.latitude, lon: q.coords.longitude}; setMeDot(myPos.lat, myPos.lon);
     me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon) + "  (±" + Math.round(q.coords.accuracy) + " ม.  " + myPos.lat.toFixed(4) + ", " + myPos.lon.toFixed(4) + ")";
   }, () => {}, {enableHighAccuracy: true, maximumAge: 15000});
 }
