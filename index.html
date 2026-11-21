@@ -23,7 +23,7 @@
         align-items:center;justify-content:center;gap:16px;padding:28px;text-align:center;font-family:system-ui,"Noto Sans Thai",sans-serif}
   #gate h2{margin:0;font-size:22px}#gate p{margin:0;color:#a1a1aa;max-width:320px;line-height:1.5}
   #gate button{border:0;border-radius:14px;padding:16px 24px;font:600 18px inherit;background:#16a34a;color:#fff}
-  #me{position:absolute;z-index:1000;top:80px;left:10px;font-size:13px;background:#fffd;padding:3px 9px;border-radius:8px}
+  #me{max-width:calc(100% - 20px);position:absolute;z-index:1000;top:80px;left:10px;font-size:13px;background:#fffd;padding:3px 9px;border-radius:8px}
 </style>
 </head>
 <body>
@@ -137,12 +137,13 @@ function unlock(p) {
   unlocked = true;
   document.getElementById("gate").style.display = "none";
   const me = document.getElementById("me");
-  me.style.display = "block"; me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon);
+  me.style.display = "block"; me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon) + "  (±" + Math.round(p.coords.accuracy) + " ม.  " + myPos.lat.toFixed(4) + ", " + myPos.lon.toFixed(4) + ")";
   if (!VIEWONLY) { report(); setInterval(report, 30000); }
   load();
   navigator.geolocation.watchPosition(q => {
+    if (q.coords.accuracy > 500) return;   // ข้ามค่าที่คลาดเคลื่อนเกิน 500 ม.
     myPos = {lat: q.coords.latitude, lon: q.coords.longitude};
-    me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon);
+    me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon) + "  (±" + Math.round(q.coords.accuracy) + " ม.  " + myPos.lat.toFixed(4) + ", " + myPos.lon.toFixed(4) + ")";
   }, () => {}, {enableHighAccuracy: true, maximumAge: 15000});
 }
 document.getElementById("gobtn").onclick = () => {
@@ -150,7 +151,7 @@ document.getElementById("gobtn").onclick = () => {
   if (!navigator.geolocation) { err.textContent = "เครื่องนี้ไม่รองรับการแชร์ตำแหน่ง"; return; }
   navigator.geolocation.getCurrentPosition(unlock,
     () => { err.textContent = "ต้องอนุญาตตำแหน่งจึงจะเข้าดูได้ ตรวจสอบการตั้งค่าเบราว์เซอร์แล้วลองใหม่"; },
-    {enableHighAccuracy: true, timeout: 20000});
+    {enableHighAccuracy: true, timeout: 20000, maximumAge: 0});
 };
 try { navigator.wakeLock.request("screen"); } catch (e) {}
 window.addEventListener("pagehide", () => navigator.sendBeacon && 0);
