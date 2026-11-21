@@ -51,19 +51,19 @@ const SECRET = "";            // ถ้าตั้งรหัสอ่าน �
 const OFFLINE_MS = 10 * 60 * 1000;  // เกิน 10 นาที = ออฟไลน์
 const REFRESH_MS = 15000;
 
-const map = L.map("map").setView([9.74, 100.03], 12);   // เกาะพะงัน
+const map = L.map("map", {zoomSnap: 0.25}).fitBounds([[9.66, 99.94], [9.81, 100.09]], {padding: [24, 24]});   // เกาะพะงัน
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   {maxZoom: 19, attribution: "© OpenStreetMap"}).addTo(map);
 
 const layer = L.layerGroup().addTo(map);
 // โซนโดยประมาณ (พิกัดกลางโซน ปรับแก้ได้)
 const ZONES = [
-  {name: "ทองศาลา", lat: 9.697, lon: 99.996},
-  {name: "ศรีธนู/หาดยาว", lat: 9.735, lon: 99.968},
-  {name: "ท้องนายปาน/ชะโลกลำ", lat: 9.770, lon: 100.010},
-  {name: "บ้านใต้/มะเดื่อหวาน", lat: 9.715, lon: 100.035},
-  {name: "หาดริ้น", lat: 9.678, lon: 100.067},
-  {name: "ท้องนายปาน/ตะวันออก", lat: 9.745, lon: 100.065}
+  {name: "ทองศาลา", lat: 9.718, lon: 99.984},            // วัดจากพิกัดจริง (±4 ม.)
+  {name: "ศรีธนู/หาดยาว", lat: 9.758, lon: 99.964},
+  {name: "โฉลกหลำ/แม่หาด", lat: 9.790, lon: 100.005},
+  {name: "บ้านใต้/มะเดื่อหวาน", lat: 9.708, lon: 100.018},
+  {name: "หาดริ้น", lat: 9.680, lon: 100.062},
+  {name: "ทองนาง/ฝั่งตะวันออก", lat: 9.750, lon: 100.052}
 ];
 let fitted = false;
 
