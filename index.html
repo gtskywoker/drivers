@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>คนขับออนไลน์</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  html,body{margin:0;height:100%;font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif}
+  #map{position:absolute;inset:0}
+  #bar{position:absolute;z-index:1000;top:10px;left:10px;right:10px;display:flex;gap:8px;pointer-events:none}
+  .pill{pointer-events:auto;flex:1;max-width:160px;padding:10px 14px;border-radius:14px;color:#fff;font-weight:600;
+        box-shadow:0 2px 8px rgba(0,0,0,.3);display:flex;justify-content:space-between;align-items:baseline}
+  .pill b{font-size:26px}
+  #free{background:#16a34a}#busy{background:#ea7a0c}
+  #status{position:absolute;z-index:1000;bottom:8px;left:10px;font-size:12px;background:#fffc;padding:3px 8px;border-radius:8px}
+  #tg{position:absolute;z-index:1000;bottom:34px;left:10px;right:10px;padding:18px;border:0;border-radius:16px;
+      font:600 18px system-ui,"Noto Sans Thai",sans-serif;color:#fff;background:#16a34a;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+  #tg.busy{background:#ea7a0c}
+  .zone{background:#fffe;border-radius:10px;padding:4px 8px;text-align:center;font:600 12px system-ui,'Noto Sans Thai',sans-serif;box-shadow:0 1px 5px #0005;width:max-content;transform:translate(-50%,-50%)}
+  .zone .zn{color:#3f3f46;font-weight:500}.zone .g{color:#16a34a;margin-right:8px}.zone .o{color:#ea7a0c}
+  #gate{position:fixed;inset:0;z-index:3000;background:#18181b;color:#fff;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:16px;padding:28px;text-align:center;font-family:system-ui,"Noto Sans Thai",sans-serif}
+  #gate h2{margin:0;font-size:22px}#gate p{margin:0;color:#a1a1aa;max-width:320px;line-height:1.5}
+  #gate button{border:0;border-radius:14px;padding:16px 24px;font:600 18px inherit;background:#16a34a;color:#fff}
+  #me{position:absolute;z-index:1000;top:80px;left:10px;font-size:13px;background:#fffd;padding:3px 9px;border-radius:8px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="bar">
+  <div class="pill" id="free"><span>ว่าง</span><b id="nf">0</b></div>
+  <div class="pill" id="busy"><span>รับงานอยู่</span><b id="nb">0</b></div>
+</div>
+<button id="tg">สถานะของฉัน: ว่าง (แตะเพื่อเปลี่ยน)</button>
+<div id="gate">
+  <h2>แชร์ตำแหน่งก่อนดูข้อมูล</h2>
+  <p>ต้องแชร์ตำแหน่งของคุณให้ระบบรู้ว่าอยู่โซนไหนก่อน จึงจะเห็นจำนวนคนขับว่าง/รับงานในแต่ละโซนได้ ข้อมูลของคุณจะแสดงเป็นจำนวนในโซนเท่านั้น ไม่มีชื่อ</p>
+  <button id="gobtn">แชร์ตำแหน่งแล้วเข้าดู</button>
+  <p id="gerr" style="color:#fca5a5"></p>
+</div>
+<div id="me" style="display:none"></div>
+<div id="status">กำลังโหลด…</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// ====== แก้ 2 บรรทัดนี้ ======
+const DB_URL = "https://koh-drivers-map-default-rtdb.asia-southeast1.firebasedatabase.app"; // Firebase Realtime Database URL
+const SECRET = "";            // ถ้าตั้งรหัสอ่าน ใส่ที่นี่ (ไม่ใช้ก็ปล่อยว่าง)
+// =============================
+const OFFLINE_MS = 10 * 60 * 1000;  // เกิน 10 นาที = ออฟไลน์
+const REFRESH_MS = 15000;
+
+const map = L.map("map").setView([9.74, 100.03], 12);   // เกาะพะงัน
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  {maxZoom: 19, attribution: "© OpenStreetMap"}).addTo(map);
+
+const layer = L.layerGroup().addTo(map);
+// โซนโดยประมาณ (พิกัดกลางโซน ปรับแก้ได้)
+const ZONES = [
+  {name: "ทองศาลา", lat: 9.697, lon: 99.996},
+  {name: "ศรีธนู/หาดยาว", lat: 9.735, lon: 99.968},
+  {name: "ท้องนายปาน/ชะโลกลำ", lat: 9.770, lon: 100.010},
+  {name: "บ้านใต้/มะเดื่อหวาน", lat: 9.715, lon: 100.035},
+  {name: "หาดริ้น", lat: 9.678, lon: 100.067},
+  {name: "ท้องนายปาน/ตะวันออก", lat: 9.745, lon: 100.065}
+];
+let fitted = false;
+
+let unlocked = false;
+async function load() {
+  if (!unlocked) return;
+  const st = document.getElementById("status");
+  try {
+    const r = await fetch(DB_URL + "/drivers.json" + (SECRET ? "?auth=" + SECRET : ""));
+    const data = (await r.json()) || {};
+    layer.clearLayers();
+    let nf = 0, nb = 0; const pts = [];
+    ZONES.forEach(z => { z.f = 0; z.b = 0; });
+    const now = Date.now();
+    for (const id in data) {
+      const d = data[id];
+      if (!d || typeof d.lat !== "number" || typeof d.lon !== "number") continue;
+      let ts = Number(d.ts); if (ts < 1e12) ts *= 1000;      // รองรับวินาที/มิลลิวินาที
+      if (!ts || now - ts > OFFLINE_MS) continue;
+      const busy = d.status === "busy";
+      busy ? nb++ : nf++;
+      let best = ZONES[0], bd = 1e9;                       // จัดเข้าโซนที่ใกล้ที่สุด
+      for (const z of ZONES) {
+        const dd = (z.lat - d.lat) ** 2 + (z.lon - d.lon) ** 2;
+        if (dd < bd) { bd = dd; best = z; }
+      }
+      best[busy ? "b" : "f"]++;
+    }
+    for (const z of ZONES) {                               // วาดเป็นจำนวนต่อโซน ไม่โชว์ตำแหน่งจริง
+      if (z.f + z.b === 0) continue;
+      L.marker([z.lat, z.lon], {icon: L.divIcon({className: "", iconSize: [130, 46], html:
+        `<div class="zone"><div class="zn">${z.name}</div><span class="g">ว่าง ${z.f}</span><span class="o">รับงาน ${z.b}</span></div>`})}).addTo(layer);
+    }
+    document.getElementById("nf").textContent = nf;
+    document.getElementById("nb").textContent = nb;
+    if (!fitted && pts.length) { map.fitBounds(pts, {padding: [60, 60], maxZoom: 14}); fitted = true; }
+    st.textContent = "อัปเดต " + new Date().toLocaleTimeString("th-TH");
+  } catch (e) {
+    st.textContent = "โหลดไม่ได้ ตรวจสอบ DB_URL";
+  }
+}
+setInterval(load, REFRESH_MS);
+
+// ===== แชร์ตำแหน่งอัตโนมัติเมื่อเปิดหน้านี้ =====
+const ME = localStorage.getItem("me") || ("d" + Math.random().toString(36).slice(2, 8));
+localStorage.setItem("me", ME);
+let myStatus = localStorage.getItem("st") || "free", myPos = null;
+const tg = document.getElementById("tg");
+function paintTg() {
+  tg.className = myStatus === "busy" ? "busy" : "";
+  tg.textContent = myStatus === "busy" ? "สถานะของฉัน: รับงานอยู่ (แตะเพื่อเปลี่ยน)" : "สถานะของฉัน: ว่าง (แตะเพื่อเปลี่ยน)";
+}
+tg.onclick = () => { myStatus = myStatus === "busy" ? "free" : "busy"; localStorage.setItem("st", myStatus); paintTg(); report(); };
+paintTg();
+async function report() {
+  if (!myPos) return;
+  try {
+    await fetch(DB_URL + "/drivers/" + ME + ".json", {method: "PUT",
+      body: JSON.stringify({name: "คนขับ " + ME.slice(-4), lat: myPos.lat, lon: myPos.lon, status: myStatus, ts: Date.now()})});
+  } catch (e) {}
+}
+const VIEWONLY = new URLSearchParams(location.search).has("viewonly");   // ?viewonly=1 = ไม่ส่งสถานะเอง (ใช้ MacroDroid ส่ง)
+if (VIEWONLY) tg.style.display = "none";
+function zoneOf(lat, lon) {
+  let best = ZONES[0], bd = 1e9;
+  for (const z of ZONES) { const dd = (z.lat - lat) ** 2 + (z.lon - lon) ** 2; if (dd < bd) { bd = dd; best = z; } }
+  return best.name;
+}
+function unlock(p) {
+  myPos = {lat: p.coords.latitude, lon: p.coords.longitude};
+  unlocked = true;
+  document.getElementById("gate").style.display = "none";
+  const me = document.getElementById("me");
+  me.style.display = "block"; me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon);
+  if (!VIEWONLY) { report(); setInterval(report, 30000); }
+  load();
+  navigator.geolocation.watchPosition(q => {
+    myPos = {lat: q.coords.latitude, lon: q.coords.longitude};
+    me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon);
+  }, () => {}, {enableHighAccuracy: true, maximumAge: 15000});
+}
+document.getElementById("gobtn").onclick = () => {
+  const err = document.getElementById("gerr"); err.textContent = "";
+  if (!navigator.geolocation) { err.textContent = "เครื่องนี้ไม่รองรับการแชร์ตำแหน่ง"; return; }
+  navigator.geolocation.getCurrentPosition(unlock,
+    () => { err.textContent = "ต้องอนุญาตตำแหน่งจึงจะเข้าดูได้ ตรวจสอบการตั้งค่าเบราว์เซอร์แล้วลองใหม่"; },
+    {enableHighAccuracy: true, timeout: 20000});
+};
+try { navigator.wakeLock.request("screen"); } catch (e) {}
+window.addEventListener("pagehide", () => navigator.sendBeacon && 0);
+
+</script>
+</body>
+</html>
