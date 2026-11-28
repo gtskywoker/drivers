@@ -1,203 +1,532 @@
-<!DOCTYPE html>
-<html lang="th">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>คนขับออนไลน์</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<style>
-  html,body{margin:0;height:100%;font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif}
-  #map{position:absolute;inset:0}
-  #bar{position:absolute;z-index:1000;top:10px;left:10px;right:10px;display:flex;gap:8px;pointer-events:none}
-  .pill{pointer-events:auto;flex:1;max-width:160px;padding:10px 14px;border-radius:14px;color:#fff;font-weight:600;
-        box-shadow:0 2px 8px rgba(0,0,0,.3);display:flex;justify-content:space-between;align-items:baseline}
-  .pill b{font-size:26px}
-  #free{background:#16a34a}#busy{background:#ea7a0c}
-  #status{position:absolute;z-index:1000;bottom:8px;left:10px;font-size:12px;background:#fffc;padding:3px 8px;border-radius:8px}
-  #tg{position:absolute;z-index:1000;bottom:34px;left:10px;right:10px;padding:18px;border:0;border-radius:16px;
-      font:600 18px system-ui,"Noto Sans Thai",sans-serif;color:#fff;background:#16a34a;box-shadow:0 2px 8px rgba(0,0,0,.3)}
-  #tg.busy{background:#ea7a0c}
-  .zone{background:#fffe;border-radius:10px;padding:4px 8px;text-align:center;font:600 12px system-ui,'Noto Sans Thai',sans-serif;box-shadow:0 1px 5px #0005;position:absolute;left:0;top:0;width:max-content;transform:translate(-50%,-50%)}
-  .zone .zn{color:#3f3f46;font-weight:500}.zone .g{color:#16a34a;margin-right:8px}.zone .o{color:#ea7a0c}
-  #gate{position:fixed;inset:0;z-index:3000;background:#18181b;color:#fff;display:flex;flex-direction:column;
-        align-items:center;justify-content:center;gap:16px;padding:28px;text-align:center;font-family:system-ui,"Noto Sans Thai",sans-serif}
-  #gate h2{margin:0;font-size:22px}#gate p{margin:0;color:#a1a1aa;max-width:320px;line-height:1.5}
-  #gate button{border:0;border-radius:14px;padding:16px 24px;font:600 18px inherit;background:#16a34a;color:#fff}
-  #me{max-width:calc(100% - 20px);position:absolute;z-index:1000;top:80px;left:10px;font-size:13px;background:#fffd;padding:3px 9px;border-radius:8px}
-</style>
-</head>
-<body>
-<div id="map"></div>
-<div id="bar">
-  <div class="pill" id="free"><span>ว่าง</span><b id="nf">0</b></div>
-  <div class="pill" id="busy"><span>รับงานอยู่</span><b id="nb">0</b></div>
-</div>
-<button id="tg">สถานะของฉัน: ว่าง (แตะเพื่อเปลี่ยน)</button>
-<div id="gate">
-  <h2>แชร์ตำแหน่งก่อนดูข้อมูล</h2>
-  <p>ต้องแชร์ตำแหน่งของคุณให้ระบบรู้ว่าอยู่โซนไหนก่อน จึงจะเห็นจำนวนคนขับว่าง/รับงานในแต่ละโซนได้ ข้อมูลของคุณจะแสดงเป็นจำนวนในโซนเท่านั้น ไม่มีชื่อ</p>
-  <button id="gobtn">แชร์ตำแหน่งแล้วเข้าดู</button>
-  <p id="gerr" style="color:#fca5a5"></p>
-</div>
-<div id="me" style="display:none"></div>
-<div id="status">กำลังโหลด…</div>
+// ============================================================
+// สคริปต์รวม: เก็บ LiveStatus + เก็บร้าน (type=shop) + อัลกอ ว่าง/รับงาน -> Firebase
+// ============================================================
+const CONFIG = {
+  SHEET_LIVESTATUS: "LiveStatus",
+  SHEET_SHOPS: "Shops",
+  LIVE_HEADERS: ["Device ID", "Latitude", "Longitude", "Timestamp"],
+  SHOP_HEADERS: ["Shop Name", "Latitude", "Longitude", "TimeStamp", "Device ID"],
+  TZ: "Asia/Bangkok",
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script>
-// ====== แก้ 2 บรรทัดนี้ ======
-const DB_URL = "https://koh-drivers-map-default-rtdb.asia-southeast1.firebasedatabase.app"; // Firebase Realtime Database URL
-const SECRET = "";            // ถ้าตั้งรหัสอ่าน ใส่ที่นี่ (ไม่ใช้ก็ปล่อยว่าง)
-// =============================
-const OFFLINE_MS = 10 * 60 * 1000;  // เกิน 10 นาที = ออฟไลน์
-const REFRESH_MS = 15000;
+  FIREBASE_DB_URL: "https://koh-drivers-map-default-rtdb.asia-southeast1.firebasedatabase.app",
+  FIREBASE_SECRET: "", // ใส่รหัสถ้ามี
 
-const map = L.map("map", {zoomSnap: 0.25}).fitBounds([[9.66, 99.94], [9.81, 100.09]], {padding: [24, 24]});   // เกาะพะงัน
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-  {maxZoom: 19, attribution: "© OpenStreetMap"}).addTo(map);
+  LIVE_COL_TS: 3, // คอลัมน์ D (นับจาก 0)
 
-const layer = L.layerGroup().addTo(map);
-// โซนโดยประมาณ (พิกัดกลางโซน ปรับแก้ได้)
-const ZONES = [
-  {name: "ทองศาลา", lat: 9.718, lon: 99.984},            // วัดจากพิกัดจริง (±4 ม.)
-  {name: "หินกอง", lat: 9.742, lon: 99.977},            // วัดจริง 2 จุด (ใต้ ~9.735 / เหนือ ~9.749)
-  {name: "มะเดื่อหวาน", lat: 9.749, lon: 100.005},       // วัดจริง 9.7444,100.0021 + ที่พักในหมู่บ้านอ้างอิง 9.754,100.007
-  {name: "ศรีธนู/หาดยาว", lat: 9.758, lon: 99.964},
-  {name: "โฉลกหลำ/แม่หาด", lat: 9.790, lon: 100.005},
-  {name: "บ้านใต้", lat: 9.708, lon: 100.018},
-  {name: "หาดริ้น", lat: 9.680, lon: 100.062},
-  {name: "ทองนาง/ฝั่งตะวันออก", lat: 9.750, lon: 100.052}
-];
-const ZONE_MAX_KM = 3;   // ไกลเกินนี้จากทุกโซน = ไม่จัดเข้าโซนใด (กันนับผิดโซน)
-function nearestZone(lat, lon) {
-  let best = null, bd = ZONE_MAX_KM;
-  for (const z of ZONES) {
-    const dy = (z.lat - lat) * 111.2, dx = (z.lon - lon) * 111.2 * Math.cos(lat * Math.PI / 180);
-    const d = Math.hypot(dx, dy);
-    if (d < bd) { bd = d; best = z; }
+  SHOP_COL_NAME: 0,
+  SHOP_COL_LAT: 1,
+  SHOP_COL_LON: 2,
+
+  // --- เก็บร้าน ---
+  ANCHOR_TOLERANCE_M: 4,        // ห่างจากจุดเดิมไม่เกินนี้ = ซ้ำ ไม่บันทึก
+  ALLOW_MULTI_POINTS: true,     // true = ร้านเดิมบันทึกจุดเพิ่มได้ (ให้ระบบ consensus ทำงาน)
+  MULTI_POINT_MAX_DIST_M: 30,   // จุดเพิ่มต้องไม่ห่างจากจุดเดิมเกินนี้ (กันสาขาอื่น/พิมพ์ชื่อซ้ำ)
+  MULTI_POINT_MAX_COUNT: 5,     // เก็บได้สูงสุดกี่จุดต่อร้าน
+  ALLOWED_SHOP_COLLECTORS: [],  // ใส่ Device ID ผู้เก็บร้าน เช่น ["98396812"] ว่าง = ทุกเครื่อง
+
+  // --- consensus จุดร้าน ---
+  SHOP_CLUSTER_RADIUS_M: 7,
+  SHOP_CACHE_SEC: 900,
+
+  // --- อัลกอ ว่าง/รับงาน ---
+  COUNTER_TOUCH_RADIUS_M: 15,   // แตะจุดร้าน (เมตร) คนขับจอดริมถนนมักห่างจุดเคาน์เตอร์ 5-15 ม.
+  MIN_DWELL_MS: 15 * 1000,      // เวลาตั้งแต่ถึงร้านจนพิกัดแรกที่ออกจากรัศมี ถึงนับว่าแวะจริง (กันขับผ่าน)
+  DEBUG_LOG: true,              // true = จดเหตุการณ์ (แตะร้าน/เริ่มรับงาน/ปลด + เหตุผล) ลงชีต StatusLog
+  SHEET_LOG: "StatusLog",
+  BUSY_DEPART_DIST_M: 300,      // วิ่งออกห่างเกินนี้ = busy
+  PENDING_EXPIRE_MS: 5 * 60 * 1000,
+
+  MIN_BUSY_PROTECT_MS: 2 * 60 * 1000,   // ช่วงคุ้มครอง (เดิม 5 นาที)
+  RETURN_APPROACH_M: 200,
+  STOP_RADIUS_M: 15,
+  STOP_DURATION_MS: 4 * 60 * 1000,      // จอดนิ่งนานเท่านี้ = ปลด (กันกรณีโทรหาลูกค้า/หาบ้านไม่เจอ)
+
+  // ส่งของไว: จอดสั้นๆ แล้วขับออก = ส่งเสร็จ
+  QUICK_DROP_MS: 12 * 1000,             // จอดอย่างน้อยเท่านี้ก่อนขับออก (ส่งไว จ่ายบัตรแล้ว ยื่นของแล้วไป)
+  QUICK_DROP_MIN_ELAPSED_MS: 60 * 1000, // ต้องเป็น busy มาแล้วอย่างน้อยเท่านี้
+  QUICK_DROP_CONFIRM_AWAY_M: 250,       // หลังจอดสั้นๆ ต้องขับห่างจากจุดจอดเกินนี้ ถึงยืนยันว่า "ส่งเสร็จ" (กันกรณีวนหาบ้าน)
+  QUICK_DROP_CANDIDATE_EXPIRE_MS: 3 * 60 * 1000, // ถ้าไม่ห่างจนยืนยันภายในเวลานี้ ยกเลิกจุดจอดนั้น
+  QUICK_DROP_MAX_JUMP_M: 80,            // ขยับออกจากจุดจอดไม่เกินนี้ถึงนับว่าเป็น "ขับออก" (กันสัญญาณขาดแล้วพิกัดกระโดด)
+  MAX_BUSY_TIMEOUT_MS: 25 * 60 * 1000,
+
+  FIREBASE_HEARTBEAT_MS: 20000,
+  KEEP_LIVESTATUS_DAYS: 2
+};
+
+const SHOP_CACHE_KEY = "SHOP_CONSENSUS_ANCHORS";
+
+// ============================================================
+// Entry points
+// ============================================================
+function doGet(e) { return handleRequest_(e); }
+function doPost(e) { return handleRequest_(e); }
+
+function onEdit(e) {
+  try {
+    const sheet = e && e.range && e.range.getSheet();
+    if (sheet && sheet.getName() === CONFIG.SHEET_SHOPS) {
+      CacheService.getScriptCache().remove(SHOP_CACHE_KEY);
+    }
+  } catch (err) {}
+}
+
+function handleRequest_(e) {
+  const lock = LockService.getScriptLock();
+  let locked = false;
+  try {
+    lock.waitLock(10000);
+    locked = true;
+    const p = parseAllParams_(e);
+    const type = String(p.type || "live").toLowerCase().trim();
+    if (type === "shop") return handleShopRequest_(p);
+    return handleLiveRequest_(p);
+  } catch (err) {
+    return text_("ERROR: " + err);
+  } finally {
+    if (locked) lock.releaseLock();
+  }
+}
+
+// ============================================================
+// 1. คนขับ -> LiveStatus + คำนวณสถานะ + Firebase
+// ============================================================
+function handleLiveRequest_(p) {
+  const deviceId = String(p.id || p.device || p.device_id || p.deviceId || p.uniqueId || "").trim();
+  const lat = toNum_(p.lat !== undefined ? p.lat : p.latitude);
+  const lon = toNum_(p.lon !== undefined ? p.lon : p.longitude);
+
+  if (!deviceId || !isValidLatLon_(lat, lon)) return text_("OK"); // เงียบเหมือนเดิม
+
+  const tsMs = normalizeTimestampMs_(p.timestamp || p.time || p.TimeStamp || p.ts) || Date.now();
+
+  appendLiveRow_(deviceId, lat, lon, tsMs);
+
+  try {
+    const result = evaluateAndPush_(deviceId, lat, lon, tsMs);
+    return text_("OK:" + result.status);
+  } catch (err) {
+    // ให้ LiveStatus เก็บได้ต่อแม้ส่วนคำนวณ/Firebase พัง
+    return text_("OK:STATUS_ERROR " + err);
+  }
+}
+
+function appendLiveRow_(deviceId, lat, lon, tsMs) {
+  const sheet = getOrCreateSheet_(getTargetSpreadsheet_(), CONFIG.SHEET_LIVESTATUS, CONFIG.LIVE_HEADERS);
+  sheet.appendRow([deviceId, lat, lon, formatTs_(tsMs)]);
+}
+
+// ============================================================
+// อัลกอ ว่าง / รับงาน (อ่าน-เขียน state รอบเดียวต่อเครื่อง)
+// ============================================================
+function evaluateAndPush_(deviceId, lat, lon, tsMs) {
+  const props = PropertiesService.getScriptProperties();
+  const key = "DRV_STATE_" + deviceId;
+  const raw = props.getProperty(key);
+
+  const st = raw ? JSON.parse(raw) : {
+    status: "free",
+    pendingShop: null,   // { name, lat, lon, firstTouchTs, lastInsideTs, maxDist }
+    busyShop: null,      // { name, lat, lon, startTs, maxDist }
+    stopAnchor: null,    // { lat, lon, sinceTs }
+    dropCandidate: null, // { lat, lon, ts } จุดจอดที่อาจเป็นที่ส่งของ รอยืนยัน
+    lastFbTs: 0,
+    lastFbStatus: null
+  };
+
+  const shops = getConsensusShopsCached_();
+  const matched = findNearestShopWithin_(lat, lon, shops, CONFIG.COUNTER_TOUCH_RADIUS_M);
+
+  // ---- busy ----
+  if (st.status === "busy") {
+    if (!st.busyShop) {
+      // state เสีย/เก่า กันค้าง
+      st.status = "free";
+      st.stopAnchor = null;
+    } else {
+      // พ่วงงาน: แตะร้านใหม่ที่ไม่ใช่ร้านเดิม -> เริ่มรอบ busy ใหม่ที่ร้านนั้น
+      if (matched && !isSamePoint_(matched.lat, matched.lon, st.busyShop.lat, st.busyShop.lon, 12)) {
+        logEvent_(deviceId, tsMs, "SWITCH_JOB", matched.name);
+        st.busyShop = { name: matched.name, lat: matched.lat, lon: matched.lon, startTs: tsMs, maxDist: 0 };
+        st.dropCandidate = null;
+        st.stopAnchor = { lat: lat, lon: lon, sinceTs: tsMs };
+        st.pendingShop = null;
+      } else {
+        const elapsed = tsMs - st.busyShop.startTs;
+        const dist = haversineMeters_(lat, lon, st.busyShop.lat, st.busyShop.lon);
+        if (dist > st.busyShop.maxDist) st.busyShop.maxDist = dist;
+
+        if (!st.stopAnchor) {
+          st.stopAnchor = { lat: lat, lon: lon, sinceTs: tsMs };
+        } else {
+          const moved = haversineMeters_(lat, lon, st.stopAnchor.lat, st.stopAnchor.lon);
+          if (moved > CONFIG.STOP_RADIUS_M) {
+            // เพิ่งขยับออกจากจุดที่จอด: ถ้าจอดนานพอ จดเป็น "จุดที่อาจเป็นที่ส่งของ" (ยังไม่ปลดทันที)
+            const stopDur = tsMs - st.stopAnchor.sinceTs;
+            if (stopDur >= CONFIG.QUICK_DROP_MS &&
+                moved <= CONFIG.QUICK_DROP_MAX_JUMP_M &&
+                elapsed >= CONFIG.QUICK_DROP_MIN_ELAPSED_MS &&
+                dist >= CONFIG.BUSY_DEPART_DIST_M) {
+              st.dropCandidate = { lat: st.stopAnchor.lat, lon: st.stopAnchor.lon, ts: tsMs };
+            }
+            st.stopAnchor = { lat: lat, lon: lon, sinceTs: tsMs };
+          }
+        }
+
+        // ยืนยัน: ขับห่างจากจุดจอดล่าสุดเกิน 250 ม. = ส่งเสร็จจริง (ถ้ายังวนอยู่แถวนั้น = ยังหาบ้าน)
+        let quickDrop = false;
+        if (st.dropCandidate) {
+          const away = haversineMeters_(lat, lon, st.dropCandidate.lat, st.dropCandidate.lon);
+          if (away >= CONFIG.QUICK_DROP_CONFIRM_AWAY_M) quickDrop = true;
+          else if (tsMs - st.dropCandidate.ts > CONFIG.QUICK_DROP_CANDIDATE_EXPIRE_MS) st.dropCandidate = null;
+        }
+        const stoppedMs = tsMs - st.stopAnchor.sinceTs;
+
+        const isReturning = st.busyShop.maxDist >= CONFIG.BUSY_DEPART_DIST_M &&
+                            (st.busyShop.maxDist - dist) >= CONFIG.RETURN_APPROACH_M;
+        const pastProtect = elapsed >= CONFIG.MIN_BUSY_PROTECT_MS;
+
+        if (quickDrop ||
+            (pastProtect && isReturning) ||
+            (pastProtect && stoppedMs >= CONFIG.STOP_DURATION_MS) ||
+            elapsed >= CONFIG.MAX_BUSY_TIMEOUT_MS) {
+          const reason = quickDrop ? "QUICK_DROP"
+            : (pastProtect && isReturning) ? "RETURNING"
+            : (pastProtect && stoppedMs >= CONFIG.STOP_DURATION_MS) ? "STOPPED_LONG"
+            : "TIMEOUT";
+          logEvent_(deviceId, tsMs, "RELEASE_FREE", reason + " " + st.busyShop.name);
+          st.status = "free";
+          st.busyShop = null;
+          st.stopAnchor = null;
+          st.pendingShop = null;
+          st.dropCandidate = null;
+        }
+      }
+    }
+  }
+
+  // ---- free ----
+  if (st.status === "free") {
+    // pending หมดอายุ (นับจากครั้งสุดท้ายที่อยู่ในรัศมีร้าน)
+    if (st.pendingShop && tsMs - st.pendingShop.lastInsideTs > CONFIG.PENDING_EXPIRE_MS) {
+      st.pendingShop = null;
+    }
+
+    if (matched) {
+      if (!st.pendingShop || !isSamePoint_(matched.lat, matched.lon, st.pendingShop.lat, st.pendingShop.lon, 12)) {
+        st.pendingShop = {
+          name: matched.name, lat: matched.lat, lon: matched.lon,
+          firstTouchTs: tsMs, lastInsideTs: tsMs, exitTs: null, maxDist: 0
+        };
+        logEvent_(deviceId, tsMs, "TOUCH", matched.name);
+      } else {
+        st.pendingShop.lastInsideTs = tsMs;
+        st.pendingShop.exitTs = null; // กลับเข้ารัศมีอีก
+      }
+    } else if (st.pendingShop && !st.pendingShop.exitTs) {
+      st.pendingShop.exitTs = tsMs;   // พิกัดแรกที่ออกนอกรัศมีร้าน
+    }
+
+    if (st.pendingShop) {
+      const dist = haversineMeters_(lat, lon, st.pendingShop.lat, st.pendingShop.lon);
+      if (dist > st.pendingShop.maxDist) st.pendingShop.maxDist = dist;
+
+      if (dist >= CONFIG.BUSY_DEPART_DIST_M) {
+        // เวลาที่อยู่ที่ร้าน = จากพิกัดแรกที่ถึง ถึงพิกัดแรกที่ออก
+        // (ตอนจอดนิ่ง มือถือส่งพิกัดห่างเป็นนาที จึงนับจำนวนพิกัดในรัศมีไม่ได้)
+        const dwell = (st.pendingShop.exitTs || st.pendingShop.lastInsideTs) - st.pendingShop.firstTouchTs;
+        if (dwell >= CONFIG.MIN_DWELL_MS) {
+          st.status = "busy";
+          st.busyShop = {
+            name: st.pendingShop.name, lat: st.pendingShop.lat, lon: st.pendingShop.lon,
+            startTs: tsMs, maxDist: dist
+          };
+          st.stopAnchor = { lat: lat, lon: lon, sinceTs: tsMs };
+          logEvent_(deviceId, tsMs, "BUSY_START", st.pendingShop.name + " dwell=" + Math.round(dwell / 1000) + "s");
+        } else {
+          logEvent_(deviceId, tsMs, "REJECT_SHORT_STAY", st.pendingShop.name + " dwell=" + Math.round(dwell / 1000) + "s");
+        }
+        st.pendingShop = null;
+      }
+    }
+  }
+
+  // ---- Firebase (เมื่อสถานะเปลี่ยน หรือครบ heartbeat) ----
+  const changed = st.lastFbStatus !== st.status;
+  const due = (tsMs - (st.lastFbTs || 0)) >= CONFIG.FIREBASE_HEARTBEAT_MS;
+  if (changed || due) {
+    const ok = pushFirebase_(deviceId, lat, lon, tsMs, st.status);
+    if (ok) {
+      st.lastFbTs = tsMs;
+      st.lastFbStatus = st.status;
+    }
+  }
+
+  props.setProperty(key, JSON.stringify(st));
+  return { status: st.status, activeShop: st.busyShop ? st.busyShop.name : null };
+}
+
+function logEvent_(deviceId, tsMs, event, detail) {
+  if (!CONFIG.DEBUG_LOG) return;
+  try {
+    const sh = getOrCreateSheet_(getTargetSpreadsheet_(), CONFIG.SHEET_LOG, ["Time", "Device", "Event", "Detail"]);
+    sh.appendRow([formatTs_(tsMs), deviceId, event, detail]);
+  } catch (e) {}
+}
+
+function pushFirebase_(deviceId, lat, lon, tsMs, status) {
+  const auth = CONFIG.FIREBASE_SECRET ? "?auth=" + encodeURIComponent(CONFIG.FIREBASE_SECRET) : "";
+  const url = CONFIG.FIREBASE_DB_URL.replace(/\/+$/, "") + "/drivers/" + encodeURIComponent(deviceId) + ".json" + auth;
+  const res = UrlFetchApp.fetch(url, {
+    method: "patch",
+    contentType: "application/json",
+    payload: JSON.stringify({ lat: lat, lon: lon, status: status, ts: tsMs }),
+    muteHttpExceptions: true
+  });
+  const code = res.getResponseCode();
+  if (code < 200 || code >= 300) {
+    console.error("Firebase " + code + ": " + res.getContentText());
+    return false;
+  }
+  return true;
+}
+
+// ============================================================
+// 2. เก็บร้าน (type=shop)
+// ============================================================
+function handleShopRequest_(p) {
+  const shopName = String(p.shop_name || p.shopName || p.shop || "").trim();
+  const deviceId = String(p.device_id || p.deviceId || p.id || p.device || "").trim();
+  const lat = toNum_(p.lat !== undefined ? p.lat : p.latitude);
+  const lon = toNum_(p.lon !== undefined ? p.lon : p.longitude);
+  const tsMs = normalizeTimestampMs_(p.timestamp || p.time || p.TimeStamp) || Date.now();
+
+  if (!shopName || !deviceId || !isValidLatLon_(lat, lon)) {
+    return text_("REJECTED:MISSING_OR_INVALID_FIELDS");
+  }
+  if (CONFIG.ALLOWED_SHOP_COLLECTORS.length > 0 && CONFIG.ALLOWED_SHOP_COLLECTORS.indexOf(deviceId) === -1) {
+    return text_("REJECTED:UNAUTHORIZED_COLLECTOR");
+  }
+
+  const sheet = getOrCreateSheet_(getTargetSpreadsheet_(), CONFIG.SHEET_SHOPS, CONFIG.SHOP_HEADERS);
+  const decision = evaluateShopPickup_(sheet, shopName, lat, lon);
+  if (!decision.save) return text_("SKIPPED:" + decision.reason);
+
+  sheet.appendRow([shopName, lat, lon, formatTs_(tsMs), deviceId]);
+  CacheService.getScriptCache().remove(SHOP_CACHE_KEY); // ให้อัลกอเห็นร้านใหม่ทันที
+  return text_("SAVED:" + decision.reason);
+}
+
+function evaluateShopPickup_(sheet, shopName, lat, lon) {
+  const clean = normalizeName_(shopName);
+  if (!clean) return { save: false, reason: "EMPTY_SHOP_NAME" };
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { save: true, reason: "FIRST_SHOP_ENTRY" };
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+  let sameCount = 0;
+  let minDist = Infinity;
+
+  for (let i = 0; i < data.length; i++) {
+    const exLat = Number(data[i][1]), exLon = Number(data[i][2]);
+    if (isNaN(exLat) || isNaN(exLon)) continue;
+    if (normalizeName_(data[i][0]) !== clean) continue;
+    sameCount++;
+    const d = haversineMeters_(lat, lon, exLat, exLon);
+    if (d < minDist) minDist = d;
+  }
+
+  if (sameCount === 0) return { save: true, reason: "NEW_SHOP_RECORDED" };
+  if (minDist <= CONFIG.ANCHOR_TOLERANCE_M) return { save: false, reason: "SAME_SHOP_WITHIN_ANCHOR" };
+
+  if (CONFIG.ALLOW_MULTI_POINTS &&
+      sameCount < CONFIG.MULTI_POINT_MAX_COUNT &&
+      minDist <= CONFIG.MULTI_POINT_MAX_DIST_M) {
+    return { save: true, reason: "EXTRA_POINT_RECORDED" };
+  }
+  return { save: false, reason: "SAME_SHOP_OUT_OF_RANGE" };
+}
+
+// ============================================================
+// จุดร้านแบบ consensus + cache
+// ============================================================
+function getConsensusShopsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(SHOP_CACHE_KEY);
+  if (cached) {
+    try { return JSON.parse(cached); } catch (e) {}
+  }
+
+  const sheet = getTargetSpreadsheet_().getSheetByName(CONFIG.SHEET_SHOPS);
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  const rows = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+  const byShop = {};
+  for (let i = 0; i < rows.length; i++) {
+    const rawName = String(rows[i][CONFIG.SHOP_COL_NAME] || "").trim();
+    const lat = Number(rows[i][CONFIG.SHOP_COL_LAT]);
+    const lon = Number(rows[i][CONFIG.SHOP_COL_LON]);
+    if (!rawName || !isValidLatLon_(lat, lon)) continue;
+    const k = normalizeName_(rawName);
+    if (!byShop[k]) byShop[k] = { name: rawName, points: [] };
+    byShop[k].points.push({ lat: lat, lon: lon, rowIndex: i });
+  }
+
+  const anchors = [];
+  for (const k in byShop) {
+    const pts = byShop[k].points;
+    let best = [];
+    for (let i = 0; i < pts.length; i++) {
+      const nb = pts.filter(q => haversineMeters_(pts[i].lat, pts[i].lon, q.lat, q.lon) <= CONFIG.SHOP_CLUSTER_RADIUS_M);
+      if (nb.length > best.length) best = nb;
+    }
+    let sLat = 0, sLon = 0;
+    best.forEach(q => { sLat += q.lat; sLon += q.lon; });
+    anchors.push({ name: byShop[k].name, lat: sLat / best.length, lon: sLon / best.length, count: best.length });
+  }
+
+  try { cache.put(SHOP_CACHE_KEY, JSON.stringify(anchors), CONFIG.SHOP_CACHE_SEC); } catch (e) {}
+  return anchors;
+}
+
+function findNearestShopWithin_(lat, lon, shops, maxMeters) {
+  let best = null, bestDist = maxMeters;
+  for (let i = 0; i < shops.length; i++) {
+    const d = haversineMeters_(lat, lon, shops[i].lat, shops[i].lon);
+    if (d <= bestDist) { bestDist = d; best = shops[i]; }
   }
   return best;
 }
-let fitted = false;
 
-let unlocked = false;
-let store = {}, es = null;
-function applyChange(path, data, merge) {
-  const parts = path.split("/").filter(Boolean);
-  if (!parts.length) { store = merge ? Object.assign(store, data || {}) : (data || {}); return; }
-  let o = store;
-  for (let i = 0; i < parts.length - 1; i++) { o = o[parts[i]] = o[parts[i]] || {}; }
-  const k = parts[parts.length - 1];
-  if (data === null) delete o[k];
-  else if (merge && typeof data === "object") o[k] = Object.assign(o[k] || {}, data);
-  else o[k] = data;
-}
-function connect() {
-  if (es) return;
-  es = new EventSource(DB_URL + "/drivers.json" + (SECRET ? "?auth=" + SECRET : ""));
-  es.addEventListener("put", e => { const m = JSON.parse(e.data); applyChange(m.path, m.data, false); load(); });
-  es.addEventListener("patch", e => { const m = JSON.parse(e.data); applyChange(m.path, m.data, true); load(); });
-}
-function disconnect() { if (es) { es.close(); es = null; } }
-document.addEventListener("visibilitychange", () => {
-  if (!unlocked) return;
-  if (document.visibilityState === "visible") { connect(); load(); } else disconnect();   // ปิดหน้าจอ = หยุดรับ ประหยัดแบต
-});
-async function load() {
-  if (!unlocked) return;
-  const st = document.getElementById("status");
-  try {
-    const data = store;
-    layer.clearLayers();
-    let nf = 0, nb = 0; const pts = [];
-    ZONES.forEach(z => { z.f = 0; z.b = 0; });
-    const now = Date.now();
-    for (const id in data) {
-      const d = data[id];
-      if (!d || typeof d.lat !== "number" || typeof d.lon !== "number" || !onIsland(d.lat, d.lon)) continue;
-      let ts = Number(d.ts); if (ts < 1e12) ts *= 1000;      // รองรับวินาที/มิลลิวินาที
-      if (!ts || now - ts > OFFLINE_MS) continue;
-      const busy = d.status === "busy";
-      busy ? nb++ : nf++;
-      const zz = nearestZone(d.lat, d.lon);
-      if (zz) zz[busy ? "b" : "f"]++;
-    }
-    for (const z of ZONES) {                               // วาดเป็นจำนวนต่อโซน ไม่โชว์ตำแหน่งจริง
-      if (z.f + z.b === 0) continue;
-      L.marker([z.lat, z.lon], {icon: L.divIcon({className: "", iconSize: [0, 0], html:
-        `<div class="zone"><div class="zn">${z.name}</div><span class="g">ว่าง ${z.f}</span><span class="o">รับงาน ${z.b}</span></div>`})}).addTo(layer);
-    }
-    document.getElementById("nf").textContent = nf;
-    document.getElementById("nb").textContent = nb;
-    if (!fitted && pts.length) { map.fitBounds(pts, {padding: [60, 60], maxZoom: 14}); fitted = true; }
-    st.textContent = "อัปเดต " + new Date().toLocaleTimeString("th-TH");
-  } catch (e) {
-    st.textContent = "โหลดไม่ได้ ตรวจสอบ DB_URL";
+// ============================================================
+// ล้างข้อมูลเก่า: ตั้ง Time-driven trigger วันละครั้ง (ตี 3)
+// ============================================================
+function cleanupOldLiveStatus() {
+  const sheet = getTargetSpreadsheet_().getSheetByName(CONFIG.SHEET_LIVESTATUS);
+  if (!sheet) return;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const cutoff = Date.now() - CONFIG.KEEP_LIVESTATUS_DAYS * 24 * 3600 * 1000;
+  const vals = sheet.getRange(2, CONFIG.LIVE_COL_TS + 1, lastRow - 1, 1).getValues();
+
+  // ข้อมูลเรียงตามเวลา: หาแถวแรกที่ยังใหม่ แล้วลบก้อนบนครั้งเดียว (เร็วกว่าลบทีละแถว)
+  let firstKeep = vals.length;
+  for (let r = 0; r < vals.length; r++) {
+    const t = normalizeTimestampMs_(vals[r][0]);
+    if (t && t >= cutoff) { firstKeep = r; break; }
   }
+  if (firstKeep > 0) sheet.deleteRows(2, firstKeep);
 }
-setInterval(load, 5000);   // เช็กคนหมดอายุทุก 5 วินาที (ทำในเครื่อง ไม่ใช้เน็ต)
 
-// ===== แชร์ตำแหน่งอัตโนมัติเมื่อเปิดหน้านี้ =====
-const ME = localStorage.getItem("me") || ("d" + Math.random().toString(36).slice(2, 8));
-localStorage.setItem("me", ME);
-let myStatus = "free", myPos = null;   // ไม่มีปุ่มสลับสถานะแล้ว
-const tg = document.getElementById("tg");
-function paintTg() {
-  tg.className = myStatus === "busy" ? "busy" : "";
-  tg.textContent = myStatus === "busy" ? "สถานะของฉัน: รับงานอยู่ (แตะเพื่อเปลี่ยน)" : "สถานะของฉัน: ว่าง (แตะเพื่อเปลี่ยน)";
+// ============================================================
+// Helpers
+// ============================================================
+function getTargetSpreadsheet_() {
+  const id = PropertiesService.getScriptProperties().getProperty("SHEET_ID");
+  return id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
 }
-tg.onclick = () => { myStatus = myStatus === "busy" ? "free" : "busy"; localStorage.setItem("st", myStatus); paintTg(); report(); };
-paintTg();
-let lastZone = null, lastStatus = null, lastSent = 0;
-async function report() {
-  if (!myPos || !onIsland(myPos.lat, myPos.lon)) return;   // อยู่นอกเกาะ ไม่นับ
-  const z = zoneOf(myPos.lat, myPos.lon), now = Date.now();
-  try {
-    if (z !== lastZone || myStatus !== lastStatus) {            // เปลี่ยนโซน/เพิ่งเข้า: ส่งเต็ม ทุกคนเห็นทันที
-      await fetch(DB_URL + "/drivers/" + ME + ".json", {method: "PUT",
-        body: JSON.stringify({name: "คนขับ " + ME.slice(-4), lat: myPos.lat, lon: myPos.lon, status: myStatus, ts: now})});
-      lastZone = z; lastStatus = myStatus; lastSent = now;
-    } else if (now - lastSent > 60000) {   // โซนเดิม: ต่ออายุสั้น ๆ ทุก 60 วินาที
-      await fetch(DB_URL + "/drivers/" + ME + ".json", {method: "PATCH", body: JSON.stringify({ts: now})});
-      lastSent = now;
+
+function getOrCreateSheet_(ss, name, headers) {
+  let sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  if (sh.getLastRow() === 0 && headers && headers.length) sh.appendRow(headers);
+  return sh;
+}
+
+function parseAllParams_(e) {
+  const p = {};
+  if (e && e.postData && e.postData.contents) {
+    const raw = String(e.postData.contents).trim();
+    if (raw.charAt(0) === "{") {
+      try {
+        const body = JSON.parse(raw);
+        // รองรับ Traccar-style JSON
+        if (body && body.location) {
+          const c = body.location.coords || body.location;
+          p.deviceId = (body.device && (body.device.uniqueId || body.device.id)) || body.deviceId;
+          p.lat = c.latitude !== undefined ? c.latitude : c.lat;
+          p.lon = c.longitude !== undefined ? c.longitude : c.lon;
+          p.ts = body.location.timestamp || c.timestamp || body.ts;
+        } else {
+          Object.assign(p, body);
+        }
+      } catch (ignore) {}
+    } else {
+      raw.split("&").forEach(function (part) {
+        if (!part) return;
+        const i = part.indexOf("=");
+        if (i > -1) {
+          try {
+            p[decodeURIComponent(part.slice(0, i).replace(/\+/g, " "))] =
+              decodeURIComponent(part.slice(i + 1).replace(/\+/g, " "));
+          } catch (ignore) {}
+        }
+      });
     }
-  } catch (e) {}
+  }
+  if (e && e.parameter) Object.assign(p, e.parameter);
+  return p;
 }
-const VIEWONLY = new URLSearchParams(location.search).has("viewonly");   // ?viewonly=1 = ไม่ส่งสถานะเอง (ใช้ MacroDroid ส่ง)
-tg.style.display = "none";   // ซ่อนปุ่ม: สถานะจะมาจากแอป KPG (ยังไม่เชื่อม) ตอนนี้ทุกคนนับเป็น "ว่าง"
-let meDot = null;
-function setMeDot(lat, lon) {
-  if (!meDot) meDot = L.circleMarker([lat, lon], {radius: 8, color: "#fff", weight: 3, fillColor: "#2563eb", fillOpacity: 1, interactive: false}).addTo(map);
-  else meDot.setLatLng([lat, lon]);
-}
-const onIsland = (la, lo) => la > 9.64 && la < 9.83 && lo > 99.93 && lo < 100.12;
-function zoneOf(lat, lon) {
-  const z = nearestZone(lat, lon);
-  return z ? z.name : "นอกโซนที่กำหนด";
-}
-function unlock(p) {
-  lastAcc = p.coords.accuracy; myPos = {lat: p.coords.latitude, lon: p.coords.longitude}; setMeDot(myPos.lat, myPos.lon);
-  unlocked = true;
-  document.getElementById("gate").style.display = "none";
-  const me = document.getElementById("me");
-  me.style.display = "block"; me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon) + "  (±" + Math.round(p.coords.accuracy) + " ม.  " + myPos.lat.toFixed(4) + ", " + myPos.lon.toFixed(4) + ")";
-  if (!VIEWONLY) { report(); setInterval(report, 5000); }
-  connect(); load();
-  navigator.geolocation.watchPosition(q => {
-    if (q.coords.accuracy > 500) return;   // ข้ามค่าที่คลาดเคลื่อนเกิน 500 ม.
-    lastAcc = q.coords.accuracy; myPos = {lat: q.coords.latitude, lon: q.coords.longitude}; setMeDot(myPos.lat, myPos.lon);
-    me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon) + "  (±" + Math.round(q.coords.accuracy) + " ม.  " + myPos.lat.toFixed(4) + ", " + myPos.lon.toFixed(4) + ")";
-  }, () => {}, {enableHighAccuracy: true, maximumAge: 15000});
-}
-document.getElementById("gobtn").onclick = () => {
-  const err = document.getElementById("gerr"); err.textContent = "";
-  if (!navigator.geolocation) { err.textContent = "เครื่องนี้ไม่รองรับการแชร์ตำแหน่ง"; return; }
-  navigator.geolocation.getCurrentPosition(unlock,
-    () => { err.textContent = "ต้องอนุญาตตำแหน่งจึงจะเข้าดูได้ ตรวจสอบการตั้งค่าเบราว์เซอร์แล้วลองใหม่"; },
-    {enableHighAccuracy: true, timeout: 20000, maximumAge: 0});
-};
-try { navigator.wakeLock.request("screen"); } catch (e) {}
-window.addEventListener("pagehide", () => navigator.sendBeacon && 0);
 
-</script>
-</body>
-</html>
+function toNum_(v) {
+  if (v === undefined || v === null || v === "") return NaN;
+  return Number(v);
+}
+
+function normalizeTimestampMs_(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val.getTime();
+  if (typeof val === "number") return val < 1e12 ? val * 1000 : val;
+  const s = String(val).trim();
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    return n < 1e12 ? n * 1000 : n;
+  }
+  // "yyyy-MM-dd HH:mm:ss" ที่ไม่มี timezone ถือเป็นเวลาไทย
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (m) return Date.parse(m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6] + "+07:00");
+  const t = Date.parse(s);
+  return isNaN(t) ? null : t;
+}
+
+function formatTs_(ms) {
+  return Utilities.formatDate(new Date(ms), CONFIG.TZ, "yyyy-MM-dd HH:mm:ss");
+}
+
+function normalizeName_(name) {
+  return String(name || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function isValidLatLon_(lat, lon) {
+  return typeof lat === "number" && typeof lon === "number" &&
+         !isNaN(lat) && !isNaN(lon) &&
+         Math.abs(lat) <= 90 && Math.abs(lon) <= 180 &&
+         !(lat === 0 && lon === 0);
+}
+
+function isSamePoint_(lat1, lon1, lat2, lon2, maxM) {
+  return haversineMeters_(lat1, lon1, lat2, lon2) <= maxM;
+}
+
+function haversineMeters_(lat1, lon1, lat2, lon2) {
+  const R = 6371000, rad = d => d * Math.PI / 180;
+  const dLat = rad(lat2 - lat1), dLon = rad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function text_(s) {
+  return ContentService.createTextOutput(s);
+}
+
+// ============================================================
+// ทดสอบจากใน Editor: Run ฟังก์ชันนี้ครั้งแรกเพื่อกดอนุญาตสิทธิ์ (Sheet + UrlFetch)
+// ============================================================
+function testRun() {
+  const r = handleRequest_({ parameter: { id: "test1", lat: "9.7087", lon: "99.9980" } });
+  console.log(r.getContent());
+}
