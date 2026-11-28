@@ -48,7 +48,8 @@
 const DB_URL = "https://koh-drivers-map-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = "";
 // =============================
-const OFFLINE_MS = 10 * 60 * 1000;  // เกิน 10 นาที = ออฟไลน์
+const OFFLINE_MS = 10 * 60 * 1000;
+const VIEWONLY = new URLSearchParams(location.search).has("viewonly");
 
 const map = L.map("map", {zoomSnap: 0.25}).fitBounds([[9.66, 99.94], [9.81, 100.09]], {padding: [24, 24]});
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -141,6 +142,32 @@ async function load() {
 }
 setInterval(load, 5000);
 
+const ME = localStorage.getItem("me") || ("d" + Math.random().toString(36).slice(2, 8));
+localStorage.setItem("me", ME);
+let myPos = null, lastZone = null, lastSent = 0;
+
+async function report() {
+  if (VIEWONLY || !myPos || !onIsland(myPos.lat, myPos.lon)) return;
+  const z = zoneOf(myPos.lat, myPos.lon), now = Date.now();
+  const existing = store && store[ME];
+  const currentStatus = (existing && existing.status === "busy") ? "busy" : "free";
+  try {
+    if (z !== lastZone) {
+      await fetch(DB_URL + "/drivers/" + ME + ".json", {
+        method: "PUT",
+        body: JSON.stringify({name: "คนขับ " + ME.slice(-4), lat: myPos.lat, lon: myPos.lon, status: currentStatus, ts: now})
+      });
+      lastZone = z; lastSent = now;
+    } else if (now - lastSent > 60000) {
+      await fetch(DB_URL + "/drivers/" + ME + ".json", {
+        method: "PATCH",
+        body: JSON.stringify({lat: myPos.lat, lon: myPos.lon, ts: now})
+      });
+      lastSent = now;
+    }
+  } catch (e) {}
+}
+
 let meDot = null;
 function setMeDot(lat, lon) {
   if (!meDot) meDot = L.circleMarker([lat, lon], {radius: 8, color: "#fff", weight: 3, fillColor: "#2563eb", fillOpacity: 1, interactive: false}).addTo(map);
@@ -148,19 +175,20 @@ function setMeDot(lat, lon) {
 }
 
 function unlock(p) {
-  const lat = p.coords.latitude, lon = p.coords.longitude;
-  setMeDot(lat, lon);
+  myPos = {lat: p.coords.latitude, lon: p.coords.longitude};
+  setMeDot(myPos.lat, myPos.lon);
   unlocked = true;
   document.getElementById("gate").style.display = "none";
   const me = document.getElementById("me");
   me.style.display = "block";
-  me.textContent = "คุณอยู่โซน: " + zoneOf(lat, lon) + "  (±" + Math.round(p.coords.accuracy) + " ม.  " + lat.toFixed(4) + ", " + lon.toFixed(4) + ")";
+  me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon) + "  (±" + Math.round(p.coords.accuracy) + " ม.  " + myPos.lat.toFixed(4) + ", " + myPos.lon.toFixed(4) + ")";
   connect(); load();
+  if (!VIEWONLY) { report(); setInterval(report, 5000); }
   navigator.geolocation.watchPosition(q => {
     if (q.coords.accuracy > 500) return;
-    const qlat = q.coords.latitude, qlon = q.coords.longitude;
-    setMeDot(qlat, qlon);
-    me.textContent = "คุณอยู่โซน: " + zoneOf(qlat, qlon) + "  (±" + Math.round(q.coords.accuracy) + " ม.  " + qlat.toFixed(4) + ", " + qlon.toFixed(4) + ")";
+    myPos = {lat: q.coords.latitude, lon: q.coords.longitude};
+    setMeDot(myPos.lat, myPos.lon);
+    me.textContent = "คุณอยู่โซน: " + zoneOf(myPos.lat, myPos.lon) + "  (±" + Math.round(q.coords.accuracy) + " ม.  " + myPos.lat.toFixed(4) + ", " + myPos.lon.toFixed(4) + ")";
   }, () => {}, {enableHighAccuracy: true, maximumAge: 15000});
 }
 
